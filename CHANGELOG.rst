@@ -154,6 +154,7 @@ Bug Fixes
 - Fixd a bug with the `sunpy.map.GenericMap.scale` property for maps containing only the CDij matrix where the scale was not being determined from the CDij matrix. (`#6573 <https://github.com/sunpy/sunpy/pull/6573>`__)
 - Fixed a bug with the `sunpy.map.GenericMap.rotation_matrix` property for maps using the CDij matrix formulism where the rotation matrix would be calculated incorrectly for non-square pixels. (`#6573 <https://github.com/sunpy/sunpy/pull/6573>`__)
 - Fixed a bug where :func:`~sunpy.time.parse_time` would always disregard the remainder of a time string starting with the final period if it was followed by only zeros, which could affect the parsing of the time string. (`#6581 <https://github.com/sunpy/sunpy/pull/6581>`__)
+- Fixed a bug in `sunpy.map.mapbase.py` to supply the pixeledges to the pcolormesh() function explicitly while calling  pcolormesh() function, so it does not treat integer pixels as pixel edges. (`#6796 <https://github.com/sunpy/sunpy/pull/6796>`__)
 
 
 Documentation
