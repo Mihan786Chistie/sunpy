@@ -5,7 +5,6 @@ This module provides a wrapper around the VSO API.
 import os
 import copy
 import json
-import socket
 import inspect
 import datetime
 import itertools
@@ -18,6 +17,7 @@ from urllib.request import Request, urlopen
 import zeep
 
 from sunpy import config, log
+from sunpy.net import _attrs as core_attrs
 from sunpy.net.attr import and_
 from sunpy.net.base_client import BaseClient, QueryResponseRow
 from sunpy.net.vso import attrs
@@ -25,7 +25,6 @@ from sunpy.net.vso.attrs import _walker as walker
 from sunpy.util.exceptions import warn_user
 from sunpy.util.net import parse_header, slugify
 from sunpy.util.parfive_helpers import Downloader, Results
-from .. import _attrs as core_attrs
 from .exceptions import (
     DownloadFailed,
     MissingInformation,
@@ -39,25 +38,47 @@ from .legacy_response import QueryResponse
 from .table_response import VSOQueryResponseTable
 from .zeep_plugins import SunPyLoggingZeepPlugin
 
-DEFAULT_URL_PORT = [{'url': 'http://docs.virtualsolar.org/WSDL/VSOi_rpc_literal.wsdl',
-                     'port': 'nsoVSOi'},
-                    {'url': 'https://sdac.virtualsolar.org/API/VSOi_rpc_literal.wsdl',
-                     'port': 'sdacVSOi'}]
+DEFAULT_URL_PORT = [
+    {'url': 'http://docs.virtualsolar.org/WSDL/VSOi_rpc_literal.wsdl', 'port': 'nsoVSOi'},
+    {'url': 'https://sdac.virtualsolar.org/API/VSOi_rpc_literal.wsdl', 'port': 'sdacVSOi'},
+    # This connects to the same cgi as the first WSDL file, but if that file
+    # isn't accessible and the SDAC cgi is unreachable, this might still work.
+    {'url': 'https://sdac.virtualsolar.org/API/VSOi_rpc_literal.wsdl', 'port': 'nsoVSOi'},
+]
 
 
 class _Str(str):
-    """ Subclass of string that contains a meta attribute for the
-    record_item associated with the file. """
+    """
+    Subclass of string that contains a meta attribute for the
+    record_item associated with the file.
+    """
     meta = None
 
 
-# ----------------------------------------
 def check_connection(url):
     try:
-        return urlopen(url).getcode() == 200
-    except (socket.error, socket.timeout, HTTPError, URLError) as e:
+        return urlopen(url, timeout=15).getcode() == 200
+    except (OSError, HTTPError, URLError) as e:
         warn_user(f"Connection to {url} failed with error {e}. Retrying with different url and port.")
-        return None
+        return False
+
+
+def check_cgi_connection(url):
+    """
+    At the moment there is no way to make an "are you alive" request to the
+    cgi, so we just hit it with a HTTP get and it gives us back a 411 response.
+    This is weird enough that it probably satisfies us for this check.
+    """
+    try:
+        return urlopen(url, timeout=15).getcode() == 411
+    except HTTPError as e:
+        if e.code == 411:
+            return True
+        warn_user(f"Connection to {url} failed with error {e}. Retrying with different url and port.")
+        return False
+    except (OSError, URLError) as e:
+        warn_user(f"Connection to {url} failed with error {e}. Retrying with different url and port.")
+        return False
 
 
 def get_online_vso_url():
@@ -66,6 +87,13 @@ def get_online_vso_url():
     """
     for mirror in DEFAULT_URL_PORT:
         if check_connection(mirror['url']):
+            # Now we get the port URL from the WSDL and test that
+            wsdl = zeep.wsdl.Document(mirror["url"], zeep.Transport())
+            # I think that accessing "VSOiService" here is equivalent to the
+            # set_ns_prefix call in the build_client function below
+            url = wsdl.services["VSOiService"].ports[mirror["port"]].binding_options["address"]
+            if not check_cgi_connection(url):
+                continue
             return mirror
 
 
@@ -418,7 +446,15 @@ class VSOClient(BaseClient):
         return results
 
     def make_getdatarequest(self, response, methods=None, info=None):
-        """ Make datarequest with methods from response. """
+        """
+        Make datarequest with methods from response.
+        """
+        # Pass back the Apache session ID to the VSO if it exists in the response
+        for item in response:
+            info_required = item.get("Info Required", None)
+            if info_required is not None:
+                info['required'] = item['Info Required']
+
         if methods is None:
             methods = self.method_order + ['URL']
 
@@ -619,7 +655,7 @@ class VSOClient(BaseClient):
         from sunpy.net import attrs as a
 
         here = os.path.dirname(os.path.realpath(__file__))
-        with open(os.path.join(here, 'data', 'attrs.json'), 'r') as attrs_file:
+        with open(os.path.join(here, 'data', 'attrs.json')) as attrs_file:
             keyword_info = json.load(attrs_file)
 
         # Now to traverse the saved dict and give them attr keys.

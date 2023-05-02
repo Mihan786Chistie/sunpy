@@ -1,3 +1,8 @@
+from functools import partial
+from xml.etree import ElementTree
+from urllib.error import URLError, HTTPError
+from urllib.request import urlopen
+
 import pytest
 from parfive import Results
 
@@ -9,17 +14,33 @@ from sunpy.net import attrs as a
 from sunpy.net.vso import attrs as va
 from sunpy.net.vso.legacy_response import QueryResponse
 from sunpy.net.vso.table_response import VSOQueryResponseTable, iter_sort_response
-from sunpy.net.vso.vso import VSOClient, build_client, get_online_vso_url
+from sunpy.net.vso.vso import (
+    DEFAULT_URL_PORT,
+    VSOClient,
+    build_client,
+    check_cgi_connection,
+    check_connection,
+    get_online_vso_url,
+)
 from sunpy.tests.mocks import MockObject
 from sunpy.time import parse_time
+from sunpy.util.exceptions import SunpyUserWarning
 
 
 class MockQRRecord:
     """
     Used to test sunpy.net.vso.QueryResponse.build_table(...)
     """
-    def __new__(cls, start_time=None, end_time=None, size=0, source='SOHO', instrument='aia',
-                extent=None, fileid="spam"):
+    def __new__(
+        cls,
+        start_time=None,
+        end_time=None,
+        size=0,
+        source='SOHO',
+        instrument='aia',
+        extent=None,
+        fileid="spam"
+    ):
         return MockObject(size=size,
                           time=MockObject(start=start_time, end=end_time),
                           source=source,
@@ -247,6 +268,62 @@ def test_vso_hmi(client, tmpdir):
         assert all([s == series[0] for s in series])
 
 
+def test_check_connection(mocker):
+    mocker.patch('sunpy.net.vso.vso.urlopen',
+                 side_effect=HTTPError('http://notathing.com/', 400, 'Bad Request', {}, None))
+    with pytest.warns(SunpyUserWarning,
+                      match='Connection to http://notathing.com/ failed with error HTTP Error 400: Bad Request.'):
+        assert check_connection('http://notathing.com/') is False
+
+
+def test_check_cgi_connection(mocker):
+    mocker.patch('sunpy.net.vso.vso.urlopen',
+                 side_effect=HTTPError('http://notathing.com/', 400, 'Bad Request', {}, None))
+    with pytest.warns(SunpyUserWarning,
+                      match='Connection to http://notathing.com/ failed with error HTTP Error 400: Bad Request.'):
+        assert check_cgi_connection('http://notathing.com/') is False
+
+    mocker.patch('sunpy.net.vso.vso.urlopen', side_effect=URLError('http://notathing.com/', 400))
+    with pytest.warns(
+            SunpyUserWarning,
+            match='Connection to http://notathing.com/ failed with error <urlopen error http://notathing.com/>.'
+    ):
+        assert check_cgi_connection('http://notathing.com/') is False
+
+
+def fail_to_open_nso_cgi(disallowed_url, url, **kwargs):
+    if url == disallowed_url:
+        raise URLError(disallowed_url, 404)
+    return urlopen(url, **kwargs)
+
+
+@pytest.mark.remote_data
+def test_fallback_if_cgi_offline(mocker):
+    """
+    This test takes the cgi endpoint URL out of the WDSL, and then disables it,
+    forcing the `get_online_vso_url` function to fallback to a secondary mirror.
+    """
+    default_url = DEFAULT_URL_PORT[0]["url"]
+    # Check that without doing anything we get the URL we expect
+    mirror = get_online_vso_url()
+    assert mirror["url"] == default_url
+
+    # Open the WDSL file and extract the cgi URL
+    # Doing this like this means we don't have to hard code it.
+    wdsl = urlopen(default_url).read()
+    t = ElementTree.fromstring(wdsl)
+    ele = t.findall("{http://schemas.xmlsoap.org/wsdl/}service")[0]
+    cgi_url = list(ele.iter("{http://schemas.xmlsoap.org/wsdl/soap/}address"))[0].attrib['location']
+
+    # Now patch out that URL so we can cause it to return an error
+    mocker.patch('sunpy.net.vso.vso.urlopen', side_effect=partial(fail_to_open_nso_cgi, cgi_url))
+
+    with pytest.warns(SunpyUserWarning,
+                      match=f"Connection to {cgi_url} failed with error .* Retrying with different url and port"):
+        mirror = get_online_vso_url()
+    assert mirror["url"] != "http://docs.virtualsolar.org/WSDL/VSOi_rpc_literal.wsdl"
+
+
 def test_get_online_vso_url(mocker):
     """
     No wsdl links returned valid HTTP response? Return None
@@ -287,7 +364,7 @@ def test_incorrect_content_disposition(client):
     assert "Content" not in files[0]
 
 
-@pytest.mark.parametrize("query, handle", [
+@pytest.mark.parametrize(('query', 'handle'), [
     ((a.Time("2011/01/01", "2011/01/02"),), True),
     ((a.Physobs.los_magnetic_field,), False),
     ((a.Time("2011/01/01", "2011/01/02"), a.Provider("SDAC"),), True),
@@ -359,3 +436,38 @@ def test_iris_filename(client):
     search_results = client.search(a.Time("2018-01-02 15:31:55", "2018-01-02 15:31:55"), a.Instrument.iris)
     filename = client.mk_filename(pattern, search_results[0], None, url)
     assert filename.endswith("iris_l2_20180102_153155_3610108077_sji_1330_t000_fits.gz")
+
+
+@pytest.mark.remote_data
+def test_table_noinfo_required(client):
+    res = client.search(a.Time('2017/12/17 00:00:00', '2017/12/17 06:00:00'), a.Instrument('aia'), a.Wavelength(171 * u.angstrom))
+    assert 'Info Required' not in res.keys()
+    assert len(res) > 0
+
+
+@pytest.mark.remote_data
+def test_table_has_info_required_swap(client):
+    res = client.search(a.Time('2020/02/15 00:00:00', '2020/02/15 20:00:00'), a.Instrument('swap'), a.Provider('ESA'), a.Source('PROBA2'))
+    assert 'Info Required' in res.keys()
+    assert len(res) > 0
+
+
+@pytest.mark.remote_data
+def test_table_has_info_required_lyra(client):
+    res = client.search(a.Time('2020/02/15 00:00:00', '2020/02/17 20:00:00'), a.Instrument('lyra'), a.Provider('ESA'), a.Source('PROBA2'))
+    assert 'Info Required' in res.keys()
+    assert len(res) > 0
+
+
+@pytest.mark.remote_data
+def test_fetch_swap(client, tmp_path):
+    res = client.search(a.Time('2020/02/15 00:00:00', '2020/02/15 20:00:00'), a.Instrument('swap'), a.Provider('ESA'), a.Source('PROBA2'))
+    files = client.fetch(res[0:1], path=tmp_path)
+    assert len(files) == 1
+
+
+@pytest.mark.remote_data
+def test_fetch_lyra(client, tmp_path):
+    res = client.search(a.Time('2020/02/15 00:00:00', '2020/02/17 20:00:00'), a.Instrument('lyra'), a.Provider('ESA'), a.Source('PROBA2'))
+    files = client.fetch(res[0:1], path=tmp_path)
+    assert len(files) == 1

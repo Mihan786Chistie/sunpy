@@ -34,7 +34,6 @@ REGEX = {
     '%f': r'(?P<microsecond>\d+)',
     '%b': r'(?P<month_str>[a-zA-Z]+)',
 }
-
 TIME_FORMAT_LIST = [
     "%Y-%m-%dT%H:%M:%S.%f",  # Example 2007-05-04T21:08:12.999999
     "%Y/%m/%dT%H:%M:%S.%f",  # Example 2007/05/04T21:08:12.999999
@@ -307,12 +306,13 @@ def parse_time(time_string, *, format=None, **kwargs):
 
     format : `str`, optional
         Specifies the format user has provided the time_string in.
-        We support the same formats of `astropy.time.Time`.
-
-        The allowed values for ``format`` can be listed with::
+        We support the same formats as `astropy.time.Time`, which are::
 
           >>> list(astropy.time.Time.FORMATS)
           {astropy_time_formats}
+
+    **kwargs :
+        Additional keyword arguments are passed to `astropy.time.Time`
 
     Returns
     -------

@@ -1,17 +1,11 @@
 """
-This module provides a FITS file reader.
+This module provides a FITS file reader for internal use.
 
-.. warning::
-
-   ``sunpy.io.fits`` is deprecated, and will be removed in sunpy 4.1. This is
-   because it was designed for internal use only. We instead recommend users
-   use the `astropy.io.fits` module, which provides more generic functionality
-   to read FITS files.
-
+We instead recommend users use the `astropy.io.fits` module,
+which provides more generic functionality to read FITS files.
 
 Notes
 -----
-
 1. FITS files allow comments to be attached to every value in the header.
    This is implemented in this module as a KEYCOMMENTS dictionary in the
    sunpy header. To add a comment to the file on write, add a comment to this
@@ -150,11 +144,11 @@ def format_comments_and_history(input_header):
     `sunpy.io.header.FileHeader`
     """
     try:
-        comment = "".join(input_header['COMMENT']).strip()
+        comment = "\n".join(input_header['COMMENT']).strip()
     except KeyError:
         comment = ""
     try:
-        history = "".join(input_header['HISTORY']).strip()
+        history = "\n".join(input_header['HISTORY']).strip()
     except KeyError:
         history = ""
 
@@ -239,8 +233,17 @@ def header_to_fits(header):
     fits_header = fits.Header()
     # Check Header
     key_comments = header.pop('KEYCOMMENTS', False)
-
+    # This first iteration separates out COMMENTS and HISTORY into their own
+    # entries.
+    header_items = []
     for k, v in header.items():
+        if k.upper() in ('COMMENT', 'HV_COMMENT', 'HISTORY'):
+            for v_line in str(v).split('\n'):
+                header_items.append((k, v_line))
+        else:
+            header_items.append((k, v))
+
+    for k, v in header_items:
         # Drop any keys that have non-ascii characters
         if not fits.Card._ascii_text_re.match(str(v)):
             warn_metadata(f'The meta key {k} is not valid ascii, dropping from the FITS header')
@@ -257,13 +260,9 @@ def header_to_fits(header):
             continue
 
         if k.upper() in ('COMMENT', 'HV_COMMENT'):
-            comments = str(v).split('\n')
-            for com in comments:
-                fits_header.add_comment(com)
+            fits_header.add_comment(v)
         elif k.upper() == 'HISTORY':
-            hists = str(v).split('\n')
-            for hist in hists:
-                fits_header.add_history(hist)
+            fits_header.add_history(v)
         elif isinstance(v, fits.header._HeaderCommentaryCards):
             if k != '':
                 fits_header.append(fits.Card(k, str(v).split('\n')))
@@ -291,9 +290,9 @@ def extract_waveunit(header):
 
     Parameters
     ----------
-    header : `sunpy._io.header.FileHeader`
-        One `~sunpy._io.header.FileHeader` instance which was created by
-        reading a FITS file. For example, `sunpy._io.fits.get_header` returns a list of
+    header : `sunpy.io.header.FileHeader`
+        One `~sunpy.io.header.FileHeader` instance which was created by
+        reading a FITS file. For example, `sunpy.io._fits.get_header` returns a list of
         such instances.
 
     Returns
