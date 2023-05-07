@@ -11,8 +11,10 @@ If you're starting fresh you might want to check out the :ref:`tutorial` first.
 .. toctree::
    :maxdepth: 1
 
-   search_multiple_wavelengths.rst
-
+   search_vso
+   search_multiple_wavelengths
+   parse_time
+   remote_data_manager
 
 Quick Reference
 ---------------
@@ -58,3 +60,5 @@ For more complete code examples, see the how-to guides above.
      - :func:`~sunpy.coordinates.sun.carrington_rotation_number`
    * - calculate the time corresponding to a given Carrington rotation
      - :func:`~sunpy.coordinates.sun.carrington_rotation_time`
+   * - see all of the available solar constants
+     - :func:`sunpy.sun.constants.print_all`
